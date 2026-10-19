@@ -1,0 +1,16 @@
+[Unit]
+Description=vHuge REAL huge page pool daemon
+ConditionPathExists=/dev/vhuge_pool
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/vhuge-load-pteditor
+ExecStart=/usr/local/sbin/vhuge-poold
+Restart=on-failure
+RestartSec=2
+SyslogIdentifier=vhuge-poold
+StandardOutput=append:/var/log/vhuge-poold.log
+StandardError=append:/var/log/vhuge-poold.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,233 @@
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index be7bb6d20129dba93eb9ec8a0c5afe2ecefa37c1..9c6ebf79ce53345f960f8e5fad736eb6a8f87178 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -36,50 +36,51 @@
+ 
+ #include <linux/clocksource.h>
+ #include <linux/interrupt.h>
+ #include <linux/kvm.h>
+ #include <linux/fs.h>
+ #include <linux/vmalloc.h>
+ #include <linux/export.h>
+ #include <linux/moduleparam.h>
+ #include <linux/mman.h>
+ #include <linux/highmem.h>
+ #include <linux/iommu.h>
+ #include <linux/cpufreq.h>
+ #include <linux/user-return-notifier.h>
+ #include <linux/srcu.h>
+ #include <linux/slab.h>
+ #include <linux/perf_event.h>
+ #include <linux/uaccess.h>
+ #include <linux/hash.h>
+ #include <linux/pci.h>
+ #include <linux/timekeeper_internal.h>
+ #include <linux/pvclock_gtod.h>
+ #include <linux/kvm_irqfd.h>
+ #include <linux/irqbypass.h>
+ #include <linux/sched/stat.h>
+ #include <linux/sched/isolation.h>
++#include <linux/sched/mm.h>
+ #include <linux/mem_encrypt.h>
+ #include <linux/entry-kvm.h>
+ #include <linux/suspend.h>
+ #include <linux/smp.h>
+ 
+ #include <trace/events/ipi.h>
+ #include <trace/events/kvm.h>
+ 
+ #include <asm/debugreg.h>
+ #include <asm/msr.h>
+ #include <asm/desc.h>
+ #include <asm/mce.h>
+ #include <asm/pkru.h>
+ #include <linux/kernel_stat.h>
+ #include <asm/fpu/api.h>
+ #include <asm/fpu/xcr.h>
+ #include <asm/fpu/xstate.h>
+ #include <asm/pvclock.h>
+ #include <asm/div64.h>
+ #include <asm/irq_remapping.h>
+ #include <asm/mshyperv.h>
+ #include <asm/hypervisor.h>
+ #include <asm/tlbflush.h>
+ #include <asm/intel_pt.h>
+ #include <asm/emulate_prefix.h>
+@@ -10058,87 +10059,166 @@ int ____kvm_emulate_hypercall(struct kvm_vcpu *vcpu, unsigned long nr,
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_UNHALT))
+ 			break;
+ 
+ 		kvm_pv_kick_cpu_op(vcpu->kvm, a1);
+ 		kvm_sched_yield(vcpu, a1);
+ 		ret = 0;
+ 		break;
+ #ifdef CONFIG_X86_64
+ 	case KVM_HC_CLOCK_PAIRING:
+ 		ret = kvm_pv_clock_pairing(vcpu, a0, a1);
+ 		break;
+ #endif
+ 	case KVM_HC_SEND_IPI:
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_SEND_IPI))
+ 			break;
+ 
+ 		ret = kvm_pv_send_ipi(vcpu->kvm, a0, a1, a2, a3, op_64_bit);
+ 		break;
+ 	case KVM_HC_SCHED_YIELD:
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_PV_SCHED_YIELD))
+ 			break;
+ 
+ 		kvm_sched_yield(vcpu, a0);
+ 		ret = 0;
+ 		break;
+-	case KVM_HC_MAP_GPA_RANGE: {
+-		u64 gpa = a0, npages = a1, attrs = a2;
++        case KVM_HC_MAP_GPA_RANGE: {
++                u64 gpa = a0, npages = a1, attrs = a2;
+ 
+ 		ret = -KVM_ENOSYS;
+ 		if (!user_exit_on_hypercall(vcpu->kvm, KVM_HC_MAP_GPA_RANGE))
+ 			break;
+ 
+ 		if (!PAGE_ALIGNED(gpa) || !npages ||
+ 		    gpa_to_gfn(gpa) + npages <= gpa_to_gfn(gpa)) {
+ 			ret = -KVM_EINVAL;
+ 			break;
+ 		}
+ 
+ 		vcpu->run->exit_reason        = KVM_EXIT_HYPERCALL;
+ 		vcpu->run->hypercall.nr       = KVM_HC_MAP_GPA_RANGE;
+ 		/*
+ 		 * In principle this should have been -KVM_ENOSYS, but userspace (QEMU <=9.2)
+ 		 * assumed that vcpu->run->hypercall.ret is never changed by KVM and thus that
+ 		 * it was always zero on KVM_EXIT_HYPERCALL.  Since KVM is now overwriting
+ 		 * vcpu->run->hypercall.ret, ensuring that it is zero to not break QEMU.
+ 		 */
+ 		vcpu->run->hypercall.ret = 0;
+ 		vcpu->run->hypercall.args[0]  = gpa;
+ 		vcpu->run->hypercall.args[1]  = npages;
+ 		vcpu->run->hypercall.args[2]  = attrs;
+ 		vcpu->run->hypercall.flags    = 0;
+ 		if (op_64_bit)
+ 			vcpu->run->hypercall.flags |= KVM_EXIT_HYPERCALL_LONG_MODE;
+ 
+ 		WARN_ON_ONCE(vcpu->run->hypercall.flags & KVM_EXIT_HYPERCALL_MBZ);
+-		vcpu->arch.complete_userspace_io = complete_hypercall;
+-		return 0;
+-	}
+-	default:
+-		ret = -KVM_ENOSYS;
+-		break;
+-	}
++                vcpu->arch.complete_userspace_io = complete_hypercall;
++                return 0;
++        }
++       case 60: {
++               u64 gpa = a0;
++               gfn_t gfn = (gfn_t)(gpa >> PAGE_SHIFT);
++
++               printk("Given GFN: 0x%lx", (unsigned long)gfn);
++
++               unsigned long flags = 0;
++               unsigned long hva = gfn_to_hva(vcpu->kvm, gfn);
++               unsigned long ret_val;
++               unsigned long order = 0;
++               struct page *pages[1] = { NULL };
++
++               if (kvm_is_error_hva(hva)) {
++                       printk(KERN_ERR "Invalid HVA: 0x%lx\n", hva);
++                       ret_val = -EFAULT;
++                       break;
++               }
++
++               unsigned long base_va = hva & PAGE_MASK;
++               struct mm_struct *mm = vcpu->kvm->mm;
++               int locked = 1;
++
++               if (!mmget_not_zero(mm)) {
++                       printk(KERN_ERR "kvm mm no longer valid\n");
++                       ret_val = -EFAULT;
++                       break;
++               }
++
++               mmap_read_lock(mm);
++               ret_val = get_user_pages_remote(mm, base_va, 1, FOLL_GET,
++                                               pages, &locked);
++               if (locked)
++                       mmap_read_unlock(mm);
++               mmput(mm);
++               if (ret_val <= 0) {
++                       printk(KERN_ERR "Failed to get user pages, ret: %ld\n",
++                              ret_val);
++                       ret_val = -EFAULT;
++                       break;
++               }
++
++               struct page *page = pages[0];
++               if (!page) {
++                       printk(KERN_ERR "Failed to retrieve page structure\n");
++                       ret_val = -EFAULT;
++                       break;
++               }
++
++               if (page_mapped(page))
++                       flags |= (1 << 1);
++
++               if (PageHuge(page) || PageTransHuge(page) || PageCompound(page)) {
++                       flags |= (1 << 0);
++                       printk(KERN_INFO "Page is part of a Huge/Compound page\n");
++                       order = folio_order(page_folio(page));
++
++                       if (order > 31) {
++                               printk(KERN_WARNING "Order value too high: %lu\n",
++                                      order);
++                               order = 31;
++                       }
++
++                       flags |= ((order & 0x1F) << 2);
++               } else {
++                       printk(KERN_INFO "Page is not a huge page\n");
++               }
++
++               unsigned long pfn = page_to_pfn(page);
++               phys_addr_t phys_base = PFN_PHYS(pfn);
++               printk(KERN_ERR "Host Phys Base: 0x%llx\n", phys_base);
++
++               put_page(page);
++
++               kvm_rdx_write(vcpu, pfn);
++               kvm_rsi_write(vcpu, flags);
++               ret_val = (unsigned long)phys_base;
++               ret = ret_val;
++               break;
++       }
++        default:
++                ret = -KVM_ENOSYS;
++                break;
++        }
+ 
+ out:
+ 	vcpu->run->hypercall.ret = ret;
+ 	return 1;
+ }
+ EXPORT_SYMBOL_GPL(____kvm_emulate_hypercall);
+ 
+ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
+ {
+ 	if (kvm_xen_hypercall_enabled(vcpu->kvm))
+ 		return kvm_xen_hypercall(vcpu);
+ 
+ 	if (kvm_hv_hypercall_enabled(vcpu))
+ 		return kvm_hv_hypercall(vcpu);
+ 
+ 	return __kvm_emulate_hypercall(vcpu, rax, rbx, rcx, rdx, rsi,
+ 				       is_64_bit_hypercall(vcpu),
+ 				       kvm_x86_call(get_cpl)(vcpu),
+ 				       complete_hypercall_exit);
+ }
+ EXPORT_SYMBOL_GPL(kvm_emulate_hypercall);
+ 
+ static int emulator_fix_hypercall(struct x86_emulate_ctxt *ctxt)
+ {
+ 	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+ 

@@ -1,0 +1,52 @@
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+compile_commands.json
+
+#swp files by editors
+*.swp
+
+# obj files
+*.o
+
+# module related
+*.cmd
+*.ko
+*.symvers
+*.order
+*.mod
+*.mod.c
+
+# build dirs
+build/**
+
+# Keep Linux tree mostly hidden, but expose vHuge kernel patch files.
+linux-6.15.2/*
+linux-6.15.2/.*
+!linux-6.15.2/localversion-vhuge
+!linux-6.15.2/LICENSE
+!linux-6.15.2/include/
+linux-6.15.2/include/*
+!linux-6.15.2/include/linux/
+linux-6.15.2/include/linux/*
+!linux-6.15.2/include/linux/vhuge.h
+!linux-6.15.2/mm/
+linux-6.15.2/mm/*
+!linux-6.15.2/mm/Kconfig
+!linux-6.15.2/mm/Makefile
+!linux-6.15.2/mm/huge_memory.c
+!linux-6.15.2/mm/khugepaged.c
+!linux-6.15.2/mm/page_alloc.c
+!linux-6.15.2/mm/vhuge_km.c
+
+# Local dependency files
+*.d
+
+# Python and run-time leftovers
+__pycache__/
+*.pyc
+
+# Local agent settings
+.claude/
